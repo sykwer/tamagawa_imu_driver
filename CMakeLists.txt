@@ -13,12 +13,32 @@ endif()
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
+find_package(rclcpp_components REQUIRED)
+find_package(agnocastlib REQUIRED)
+find_package(agnocast_components REQUIRED)
+
 ament_auto_add_executable(tag_serial_driver
 	src/tag_serial_driver.cpp
 )
 
-ament_auto_add_executable(tag_can_driver
+ament_auto_add_library(tag_can_driver SHARED
 	src/tag_can_driver.cpp
+)
+
+target_include_directories(tag_can_driver PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
+ament_target_dependencies(tag_can_driver
+  agnocastlib
+  rclcpp_components
+)
+
+agnocast_components_register_node(tag_can_driver
+  PLUGIN "TagCanDriver"
+  EXECUTABLE tag_can_driver_node
+  EXECUTOR AgnocastOnlyCallbackIsolatedExecutor
+  RESOURCE_INDEX agnocast_components
 )
 
 if(BUILD_TESTING)

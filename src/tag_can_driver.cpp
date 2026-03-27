@@ -46,89 +46,106 @@
  * Ver 1.00 2019/6/1
  */
 
+#include "agnocast/agnocast.hpp"
 #include "can_msgs/msg/frame.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 
-#include "rate_bound_status.hpp"
 #include <memory>
 
-rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub;
-std::unique_ptr<custom_diagnostic_tasks::RateBoundStatus> rate_bound_status;
-std::unique_ptr<diagnostic_updater::Updater> diag_updater;
-
-uint16_t counter;
-int16_t angular_velocity_x_raw = 0;
-int16_t angular_velocity_y_raw = 0;
-int16_t angular_velocity_z_raw = 0;
-int16_t acceleration_x_raw = 0;
-int16_t acceleration_y_raw = 0;
-int16_t acceleration_z_raw = 0;
-
-sensor_msgs::msg::Imu imu_msg;
-std::string imu_frame_id;
-
-void receive_CAN(const can_msgs::msg::Frame::ConstSharedPtr msg)
+class TagCanDriver : public agnocast::Node
 {
-  if (msg->id == 0x319) {
-    imu_msg.header.frame_id = imu_frame_id;
-    imu_msg.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
+public:
+  explicit TagCanDriver(const rclcpp::NodeOptions & options)
+  : agnocast::Node("tag_can_driver", options)
+  {
+    imu_frame_id_ = declare_parameter<std::string>("imu_frame_id", "imu");
 
-    counter = msg->data[1] + (msg->data[0] << 8);
-    angular_velocity_x_raw = msg->data[3] + (msg->data[2] << 8);
-    imu_msg.angular_velocity.x =
-      angular_velocity_x_raw * (200 / pow(2, 15)) * M_PI / 180;  // LSB & unit [deg/s] => [rad/s]
-    angular_velocity_y_raw = msg->data[5] + (msg->data[4] << 8);
-    imu_msg.angular_velocity.y =
-      angular_velocity_y_raw * (200 / pow(2, 15)) * M_PI / 180;  // LSB & unit [deg/s] => [rad/s]
-    angular_velocity_z_raw = msg->data[7] + (msg->data[6] << 8);
-    imu_msg.angular_velocity.z =
-      angular_velocity_z_raw * (200 / pow(2, 15)) * M_PI / 180;  // LSB & unit [deg/s] => [rad/s]
+    // NOTE: diagnostic_updater disabled (not supported by agnocast::Node)
+    // auto frequency_reference = declare_parameter<double>("frequency_reference", 10.0);
+    // auto ok_min_freq = declare_parameter<double>(
+    //   "diagnostics.rate_bound_status.frequency_ok.min_hz", 100.0);
+    // auto ok_max_freq = declare_parameter<double>(
+    //   "diagnostics.rate_bound_status.frequency_ok.max_hz", 10000.0);
+    // auto warn_min_freq = declare_parameter<double>(
+    //   "diagnostics.rate_bound_status.frequency_warn.min_hz", 50.0);
+    // auto warn_max_freq = declare_parameter<double>(
+    //   "diagnostics.rate_bound_status.frequency_warn.max_hz", 100000.0);
+    // declare_parameter<bool>("diagnostic_updater.use_fqn", true);
+    // rate_bound_status_ = std::make_unique<custom_diagnostic_tasks::RateBoundStatus>(
+    //   this, custom_diagnostic_tasks::RateBoundStatusParam(ok_min_freq, ok_max_freq),
+    //   custom_diagnostic_tasks::RateBoundStatusParam(warn_min_freq, warn_max_freq), 2, false);
+    // diag_updater_ = std::make_unique<diagnostic_updater::Updater>(
+    //   std::shared_ptr<rclcpp::Node>(this, [](auto *) {}));
+    // diag_updater_->setHardwareID(imu_frame_id_);
+    // diag_updater_->setPeriod(1.0 / frequency_reference);
+    // diag_updater_->add(*rate_bound_status_);
+    // diag_updater_->force_update();
+
+    sub_ = create_subscription<can_msgs::msg::Frame>(
+      "/can/imu", 100,
+      [this](const agnocast::ipc_shared_ptr<const can_msgs::msg::Frame> & msg) {
+        receive_CAN(msg);
+      });
+
+    imu_pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", 100);
   }
-  if (msg->id == 0x31A) {
-    acceleration_x_raw = msg->data[3] + (msg->data[2] << 8);
-    imu_msg.linear_acceleration.x = acceleration_x_raw * (100 / pow(2, 15));  // LSB & unit [m/s^2]
-    acceleration_y_raw = msg->data[5] + (msg->data[4] << 8);
-    imu_msg.linear_acceleration.y = acceleration_y_raw * (100 / pow(2, 15));  // LSB & unit [m/s^2]
-    acceleration_z_raw = msg->data[7] + (msg->data[6] << 8);
-    imu_msg.linear_acceleration.z = acceleration_z_raw * (100 / pow(2, 15));  // LSB & unit [m/s^2]
 
-    imu_msg.orientation.x = 0.0;
-    imu_msg.orientation.y = 0.0;
-    imu_msg.orientation.z = 0.0;
-    imu_msg.orientation.w = 1.0;
-    pub->publish(imu_msg);
-    rate_bound_status->tick();
+private:
+  void receive_CAN(const agnocast::ipc_shared_ptr<const can_msgs::msg::Frame> & msg)
+  {
+    if (msg->id == 0x319) {
+      imu_msg_.header.frame_id = imu_frame_id_;
+      imu_msg_.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
+
+      counter_ = msg->data[1] + (msg->data[0] << 8);
+      angular_velocity_x_raw_ = msg->data[3] + (msg->data[2] << 8);
+      imu_msg_.angular_velocity.x =
+        angular_velocity_x_raw_ * (200 / pow(2, 15)) * M_PI / 180;  // LSB & unit [deg/s] => [rad/s]
+      angular_velocity_y_raw_ = msg->data[5] + (msg->data[4] << 8);
+      imu_msg_.angular_velocity.y =
+        angular_velocity_y_raw_ * (200 / pow(2, 15)) * M_PI / 180;  // LSB & unit [deg/s] => [rad/s]
+      angular_velocity_z_raw_ = msg->data[7] + (msg->data[6] << 8);
+      imu_msg_.angular_velocity.z =
+        angular_velocity_z_raw_ * (200 / pow(2, 15)) * M_PI / 180;  // LSB & unit [deg/s] => [rad/s]
+    }
+    if (msg->id == 0x31A) {
+      acceleration_x_raw_ = msg->data[3] + (msg->data[2] << 8);
+      imu_msg_.linear_acceleration.x =
+        acceleration_x_raw_ * (100 / pow(2, 15));  // LSB & unit [m/s^2]
+      acceleration_y_raw_ = msg->data[5] + (msg->data[4] << 8);
+      imu_msg_.linear_acceleration.y =
+        acceleration_y_raw_ * (100 / pow(2, 15));  // LSB & unit [m/s^2]
+      acceleration_z_raw_ = msg->data[7] + (msg->data[6] << 8);
+      imu_msg_.linear_acceleration.z =
+        acceleration_z_raw_ * (100 / pow(2, 15));  // LSB & unit [m/s^2]
+
+      imu_msg_.orientation.x = 0.0;
+      imu_msg_.orientation.y = 0.0;
+      imu_msg_.orientation.z = 0.0;
+      imu_msg_.orientation.w = 1.0;
+
+      auto loaned = imu_pub_->borrow_loaned_message();
+      *loaned = imu_msg_;
+      imu_pub_->publish(std::move(loaned));
+      // NOTE: rate_bound_status_->tick() disabled
+    }
   }
-}
 
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
+  agnocast::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
+  agnocast::Subscription<can_msgs::msg::Frame>::SharedPtr sub_;
 
-  auto node = rclcpp::Node::make_shared("tag_can_driver");
-  imu_frame_id = node->declare_parameter<std::string>("imu_frame_id", "imu");
-  auto frequency_reference = node->declare_parameter<double>("frequency_reference", 10.0);
-  auto ok_min_freq = node->declare_parameter<double>(
-    "diagnostics.rate_bound_status.frequency_ok.min_hz", 100.0);
-  auto ok_max_freq = node->declare_parameter<double>(
-    "diagnostics.rate_bound_status.frequency_ok.max_hz", 10000.0);
-  auto warn_min_freq = node->declare_parameter<double>(
-    "diagnostics.rate_bound_status.frequency_warn.min_hz", 50.0);
-  auto warn_max_freq = node->declare_parameter<double>(
-    "diagnostics.rate_bound_status.frequency_warn.max_hz", 100000.0);
-  node->declare_parameter<bool>("diagnostic_updater.use_fqn", true);  // read by diagnostic updater
-  rate_bound_status = std::make_unique<custom_diagnostic_tasks::RateBoundStatus>(
-    node.get(), custom_diagnostic_tasks::RateBoundStatusParam(ok_min_freq, ok_max_freq),
-    custom_diagnostic_tasks::RateBoundStatusParam(warn_min_freq, warn_max_freq), 2, false);
-  diag_updater = std::make_unique<diagnostic_updater::Updater>(node);
-  diag_updater->setHardwareID(imu_frame_id);
-  diag_updater->setPeriod(1.0 / frequency_reference);
-  diag_updater->add(*rate_bound_status);
-  diag_updater->force_update();
-  rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr sub = node->create_subscription<can_msgs::msg::Frame>("/can/imu", 100, receive_CAN);
-  pub = node->create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", 100);
-  rclcpp::spin(node);
+  uint16_t counter_ = 0;
+  int16_t angular_velocity_x_raw_ = 0;
+  int16_t angular_velocity_y_raw_ = 0;
+  int16_t angular_velocity_z_raw_ = 0;
+  int16_t acceleration_x_raw_ = 0;
+  int16_t acceleration_y_raw_ = 0;
+  int16_t acceleration_z_raw_ = 0;
 
-  return 0;
-}
+  sensor_msgs::msg::Imu imu_msg_;
+  std::string imu_frame_id_;
+};
+
+#include <rclcpp_components/register_node_macro.hpp>
+RCLCPP_COMPONENTS_REGISTER_NODE(TagCanDriver)

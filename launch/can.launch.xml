@@ -2,6 +2,8 @@
 
 <launch>
 
-  <node pkg="tamagawa_imu_driver" name="tag_can_driver" exec="tag_can_driver" />
+  <node pkg="tamagawa_imu_driver" name="tag_can_driver" exec="tag_can_driver_node">
+    <env name="LD_PRELOAD" value="$(var ld_preload_value)"/>
+  </node>
 
 </launch>
